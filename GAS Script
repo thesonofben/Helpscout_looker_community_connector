@@ -1,0 +1,197 @@
+var cc = DataStudioApp.createCommunityConnector();
+const id = "xxxxxxxxxxxxxxxxx" //App ID from My Apps in Helpscout  
+const secret = "xxxxxxxxxxxxxxxxx" //App Secret from My Apps in Helpscout  
+
+function getAuthType() {
+  return cc
+    .newAuthTypeResponse()
+    .setAuthType(cc.AuthType.OAUTH2)
+    .build();
+}
+
+function resetAuth() {
+  getOAuthService().reset()
+}
+
+function isAuthValid() {
+  return getOAuthService().hasAccess();
+
+}
+
+function authCallback(request) {
+  var authorized = getOAuthService().handleCallback(request);
+  if (authorized) {
+    return HtmlService.createHtmlOutput('Success! You can close this tab.');
+  } else {
+    return HtmlService.createHtmlOutput('Denied. You can close this tab');
+  };
+};
+
+
+function get3PAuthorizationUrls() {
+  Logger.log(getOAuthService().getAuthorizationUrl())
+  return getOAuthService().getAuthorizationUrl();
+}
+
+
+
+function getOAuthService() {
+  return OAuth2.createService('LookerConnector')
+    .setAuthorizationBaseUrl('https://secure.helpscout.net/authentication/authorizeClientApplication?')
+    .setTokenUrl('https://api.helpscout.net/v2/oauth2/token')
+    .setClientId(id)
+    .setClientSecret(secret)
+    .setPropertyStore(PropertiesService.getUserProperties())
+    .setCallbackFunction('authCallback')
+    .setScope('...');
+};
+
+
+function getConfig() {
+  const config = cc.getConfig()
+  config.setDateRangeRequired(true)
+  return config.build()
+
+}
+
+function isAdminUser(){
+return true
+
+}
+
+
+function getFields() {
+  const fields = cc.getFields();
+
+  fields.newDimension()
+    .setId("date")
+    .setName("Date")
+    .setDescription("The Date")
+    .setType(cc.FieldType.YEAR_MONTH_DAY);
+
+  fields.newMetric()
+    .setId("totalConversations")
+    .setName("Total Conversations")
+    .setDescription("The number of how many conversations were had")
+    .setType(cc.FieldType.NUMBER);
+
+  fields.newMetric()
+    .setId("msgReceived")
+    .setName("Messages Received")
+    .setDescription("The number of emails received")
+    .setType(cc.FieldType.NUMBER);
+
+
+  fields.newMetric()
+    .setId("Response_time")
+    .setName("Response Time")
+    .setDescription("Response time in Hours")
+    .setType(cc.FieldType.NUMBER);
+
+  return fields;
+}
+
+function getSchema() {
+  return cc.newGetSchemaResponse()
+    .setFields(getFields()).build()
+}
+
+function getData(request) {
+  // const start = "2023-08-08"
+  // const end = "2023-08-10" 
+  const start =  request.dateRange.startDate;
+  const end =    request.dateRange.endDate;
+
+  var service = getOAuthService();
+  if (service.hasAccess()) {
+    var url1 = 'https://api.helpscout.net/v2/reports/conversations/new?start=' + start + 'T00:00:00Z&end=' + end + 'T23:59:59Z&officeHours=true&viewBy=day';
+    var options1 = {
+      'method': 'GET',
+      'muteHttpExceptions': true,
+      headers: {
+        Authorization: 'Bearer ' + service.getAccessToken(),
+        'Content-Type': 'application/json; charset=utf-8'
+      }
+    }
+
+    var url2 = 'https://api.helpscout.net/v2/reports/conversations/received-messages?start=' + start + 'T00:00:00Z&end=' + end + 'T23:59:59Z&officeHours=true&viewBy=day';
+    var options2 = {
+      'method': 'GET',
+      'muteHttpExceptions': true,
+      headers: {
+        Authorization: 'Bearer ' + service.getAccessToken(),
+        'Content-Type': 'application/json; charset=utf-8'
+      }
+    }
+
+
+    var url3 = 'https://api.helpscout.net/v2/reports/productivity/response-time?start=' + start + 'T00:00:00Z&end=' + end + 'T23:59:59Z&officeHours=true';
+    var options3 = {
+      'method': 'GET',
+      'muteHttpExceptions': true,
+      headers: {
+        Authorization: 'Bearer ' + service.getAccessToken(),
+        'Content-Type': 'application/json; charset=utf-8'
+      }
+    }
+
+
+    var response1 = UrlFetchApp.fetch(url1, options1)
+    var response2 = UrlFetchApp.fetch(url2, options2)
+    var response3 = UrlFetchApp.fetch(url3, options3)
+
+    var result1 = JSON.parse(response1.getContentText());
+    var result2 = JSON.parse(response2.getContentText());
+    var result3 = JSON.parse(response3.getContentText());
+
+
+    Logger.log(result3.current)
+    Logger.log(result2.current)
+    Logger.log(result1.current)
+    
+
+    let res = response1;
+
+    res = JSON.parse(res).current;
+    Logger.log(res)
+    
+    let requestedIDs = request.fields.map(object => object['name']);
+    let data = [];
+    
+
+    for (let i = 0; i < result1.current.length; i++) {
+      let row = [];
+      for(let requestedID of requestedIDs){
+        switch(requestedID){
+          case 'date':
+            row.push(result1.current[i].start.split('T')[0].replace(/-/g, '')); // Date
+            break;
+          case 'totalConversations':
+            row.push(result1.current[i].count); // Total Conversations
+            break;
+          case 'msgReceived':
+            row.push(result2.current[i].messages); // Messages Received
+            break;
+          case 'Response_time':
+          if (result3.current[i] && result3.current[i].time) {
+            // Check if time is available in the current result3 item
+            row.push(result3.current[i].time); // Response Time in Hours
+          } else {
+            row.push(null); // No data available, push null or an appropriate placeholder
+          }
+          break;
+        default:
+          break;
+      }
+    }
+      data.push(row);
+    }
+    let fields = getFields().forIds(requestedIDs);
+
+    return cc.newGetDataResponse()
+      .setFields(fields)
+      .addAllRows(data)
+      .build();
+
+  }
+}
